@@ -1,0 +1,22 @@
+--- src/ui/bundler.js
++++ src/ui/bundler.js
+@@ -110,11 +110,16 @@ export async function buildUI(config, logger) {
+     await buildCSS(root, outDir, config, logger);
+   }
+   
+-  // Step 3: Generate router
++  // Step 3: Generate router (if we have routes)
+   if (routes.length > 0) {
+     logger.info('Step 3: Generating router...');
+     await generateRouter(routes, buildDir, logger);
+   }
++  
++  // Step 4: Generate main entry point
++  logger.info('Step 4: Generating main entry point...');
++  const { generateMainEntry } = await import('../components/entry-generator.js');
++  await generateMainEntry(buildDir, routes.length > 0, logger);
+ 
+-  // Step 4: Bundle JavaScript
+-  logger.info('Step 4: Bundling JavaScript...');
++  // Step 5: Bundle JavaScript
++  logger.info('Step 5: Bundling JavaScript...');
