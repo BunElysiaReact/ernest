@@ -1,5 +1,5 @@
 # Ernest ⚡
-
+## we are in extreeme beta version right now and only the ui part works i have finaly made it to work the script is similar with bertui build and dev server for now because gad damn it the shit is hard as f**ck but v0.0.1 of ernest bundler by ernest tech house is out and our npm name is peaseernest well because somebody has already had the name ernest not only the name changes the cli names are still the same 
 **Universal bundler for BertUI ecosystem - powers bertui bunny bertuimarked**
 
 > Built with ❤️ by Ernest Tech House
@@ -20,10 +20,10 @@
 
 ```bash
 # Install globally
-bun add -g ernest
+bun add -g peaseernest
 
 # Or in your project
-bun add ernest
+bun add peaseernest
 ```
 
 ### Usage

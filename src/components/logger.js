@@ -28,7 +28,8 @@ export function createLogger(config = {}) {
     const empty = 10 - filled;
     const bar = '█'.repeat(filled) + '░'.repeat(empty);
     
-    this.log(`[${bar}] ${percent}% ${message}`);
+    // FIX: Use this.info() instead of this.log()
+    this.info(`[${bar}] ${percent}% ${message}`);
   };
   
   logger.buildStats = function(stats) {

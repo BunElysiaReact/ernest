@@ -1,6 +1,6 @@
-// src/ui/bundler.js - CLEAN VERSION
+// src/ui/bundler.js - COMPLETE VERSION
 import { join } from 'path';
-import { existsSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, readFileSync } from 'fs';
 import { UICompiler } from './compiler.js';
 import { ServerIslandProcessor } from './islands.js';
 import { buildCSS } from '../components/assets.js';
@@ -18,7 +18,7 @@ export async function buildUI(config, logger) {
   // Safety check: ensure logger has banner method
   if (!logger.banner) {
     logger.banner = function() {
-      this.bigLog('⚡ ERNEST by Ernest Tech House', { color: 'brightCyan' });
+      this.bigLog('⚡ ERNEST by Ernest Tech House(beta)', { color: 'brightCyan' });
       this.info('🔧 powers: bertui • bunny • bertuimarked');
     };
   }
@@ -101,12 +101,16 @@ async function bundleJavaScript(buildDir, outDir, config, logger) {
   }
   
   try {
+    // Change working directory to buildDir
+    const originalCwd = process.cwd();
+    process.chdir(buildDir);
+    
     logger.info('🔧 Bundling with production JSX...');
     
-    const result = await Bun.build({
+    const buildConfig = {
       entrypoints: [buildEntry],
       outdir: join(outDir, 'assets'),
-      target: config.target,
+      target: 'browser',
       minify: config.minify,
       splitting: config.splitting,
       sourcemap: config.sourcemap ? 'external' : 'none',
@@ -120,13 +124,47 @@ async function bundleJavaScript(buildDir, outDir, config, logger) {
         'process.env.NODE_ENV': '"production"',
         ...config.define
       }
-    });
+    };
+    
+    let result;
+    
+    try {
+      result = await Bun.build(buildConfig);
+    } catch (buildError) {
+      // Handle AggregateError from Bun.build
+      process.chdir(originalCwd);
+      
+      logger.error('❌ Bun.build threw an error!');
+      logger.error(`   Type: ${buildError.name}`);
+      logger.error(`   Message: ${buildError.message}`);
+      
+      // AggregateError has an 'errors' property
+      if (buildError.errors && Array.isArray(buildError.errors)) {
+        logger.error(`\n📋 Individual errors (${buildError.errors.length} total):`);
+        buildError.errors.forEach((err, i) => {
+          logger.error(`\n${i + 1}. ${err.message}`);
+          if (err.position) {
+            logger.error(`   File: ${err.position.file || 'unknown'}`);
+            logger.error(`   Line: ${err.position.line || 'unknown'}`);
+            logger.error(`   Column: ${err.position.column || 'unknown'}`);
+          }
+        });
+      }
+      
+      if (buildError.stack) {
+        logger.debug(`Stack trace:\n${buildError.stack}`);
+      }
+      
+      throw new Error('JavaScript bundling failed - see errors above');
+    }
+    
+    process.chdir(originalCwd);
     
     if (!result.success) {
       logger.error('❌ JavaScript build failed!');
       
       if (result.logs && result.logs.length > 0) {
-        logger.error('\n📋 Build errors:');
+        logger.error(`\n📋 Build errors:`);
         result.logs.forEach((log, i) => {
           logger.error(`\n${i + 1}. ${log.message}`);
           if (log.position) {

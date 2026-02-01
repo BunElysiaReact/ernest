@@ -1,13 +1,13 @@
-// src/components/cli-program.js
+// src/components/cli-program.js - UPDATED with serve command
 import { buildUI } from '../ui/bundler.js';
 import { buildDocs } from '../md/bundler.js';
 import { startDevServerUI } from '../ui/server.js';
 import { startDevServerDocs } from '../md/server.js';
+import { serveUI } from '../ui/serve.js';
 import { loadConfig } from './config.js';
 import { showHelp, showVersion } from './help.js';
 import { migrateProject } from './migrate.js';
 
-// REMOVE the duplicate export at the bottom and just export the function
 export async function program(command, args, logger) {
   switch (command) {
     case 'dev':
@@ -16,6 +16,10 @@ export async function program(command, args, logger) {
     
     case 'build':
       await handleBuild(args, logger);
+      break;
+    
+    case 'serve':
+      await handleServe(args, logger);
       break;
     
     case 'init':
@@ -70,6 +74,18 @@ async function handleBuild(args, logger) {
   }
 }
 
+async function handleServe(args, logger) {
+  const options = parseArgs(args);
+  const config = await loadConfig(options);
+  
+  // Serve command uses a different default port (8080)
+  if (!options.port) {
+    config.port = 8080;
+  }
+  
+  await serveUI(config, logger);
+}
+
 async function handleInit(args, logger) {
   const { writeConfig } = await import('./config.js');
   await writeConfig();
@@ -111,4 +127,3 @@ function parseArgs(args) {
   
   return options;
 }
-

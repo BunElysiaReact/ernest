@@ -1,6 +1,6 @@
-// src/ui/compiler.js
+// src/ui/compiler.js - COMPLETE VERSION
 import { join, dirname, relative, extname } from 'path';
-import { existsSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'fs';
 
 export class UICompiler {
   constructor(config, logger) {
@@ -9,14 +9,15 @@ export class UICompiler {
     this.root = process.cwd();
   }
   
-  async compileForBuild() {
-    const srcDir = join(this.root, this.config.entry);
+  async compileForBuild(root, buildDir) {
+    const srcDir = join(root, this.config.entry);
     const pagesDir = join(srcDir, 'pages');
     
     if (!existsSync(srcDir)) {
       throw new Error(`${this.config.entry} directory not found!`);
     }
     
+    // Step 1: Discover routes
     const routes = existsSync(pagesDir) 
       ? await this.discoverRoutes(pagesDir)
       : [];
@@ -24,7 +25,7 @@ export class UICompiler {
     const serverIslands = [];
     const clientRoutes = [];
     
-    // Detect Server Islands
+    // Step 2: Detect Server Islands
     for (const route of routes) {
       const sourceCode = await Bun.file(route.path).text();
       const isServerIsland = sourceCode.includes('export const render = "server"');
@@ -39,7 +40,135 @@ export class UICompiler {
     
     this.logger.info(`Discovered ${routes.length} routes (${serverIslands.length} Server Islands)`);
     
+    // Step 3: Actually compile the source files to buildDir
+    await this.compileSrcToBuild(srcDir, buildDir);
+    
     return { routes, serverIslands, clientRoutes };
+  }
+  
+  async compileSrcToBuild(srcDir, buildDir) {
+    this.logger.info('Compiling source files to build directory...');
+    
+    // Create bunfig.toml for production JSX
+    const bunfigContent = `
+[build]
+jsx = "react"
+jsxFactory = "React.createElement"
+jsxFragment = "React.Fragment"
+`.trim();
+    
+    writeFileSync(join(buildDir, 'bunfig.toml'), bunfigContent);
+    
+    await this.compileDirectory(srcDir, buildDir);
+    this.logger.info('✓ Source files compiled');
+  }
+  
+  async compileDirectory(srcDir, outDir) {
+    const entries = readdirSync(srcDir, { withFileTypes: true });
+    
+    for (const entry of entries) {
+      const srcPath = join(srcDir, entry.name);
+      const outPath = join(outDir, entry.name);
+      
+      if (entry.isDirectory()) {
+        // Skip templates directory
+        if (entry.name === 'templates') continue;
+        
+        mkdirSync(outPath, { recursive: true });
+        await this.compileDirectory(srcPath, outPath);
+      } else {
+        const ext = extname(entry.name);
+        
+        // Skip CSS files
+        if (ext === '.css') continue;
+        
+        // Compile JSX/TSX/TS files
+        if (['.jsx', '.tsx', '.ts'].includes(ext)) {
+          await this.compileFile(srcPath, outPath);
+        } 
+        // Copy JS files (with minor processing)
+        else if (ext === '.js') {
+          await this.processJSFile(srcPath, outPath);
+        }
+      }
+    }
+  }
+  
+  async compileFile(srcPath, outPath) {
+    const ext = extname(srcPath);
+    const outFile = outPath.replace(/\.(jsx|tsx|ts)$/, '.js');
+    
+    try {
+      let code = await Bun.file(srcPath).text();
+      
+      // Remove CSS imports
+      code = code.replace(/import\s+['"][^'"]*\.css['"];?\s*/g, '');
+      code = code.replace(/import\s+['"]bertui\/styles['"]\s*;?\s*/g, '');
+      
+      // Add React import if missing and needed
+      if (!code.includes('import React') && this.usesJSX(code)) {
+        code = `import React from 'react';\n${code}`;
+      }
+      
+      // Transpile with Bun
+      const transpiler = new Bun.Transpiler({
+        loader: ext === '.tsx' ? 'tsx' : ext === '.ts' ? 'ts' : 'jsx',
+        target: 'browser',
+        define: {
+          'process.env.NODE_ENV': '"production"'
+        },
+        tsconfig: {
+          compilerOptions: {
+            jsx: 'react',
+            jsxFactory: 'React.createElement',
+            jsxFragmentFactory: 'React.Fragment',
+            target: 'ES2020'
+          }
+        }
+      });
+      
+      let compiled = await transpiler.transform(code);
+      
+      // Fix relative imports to add .js extension
+      compiled = this.fixRelativeImports(compiled);
+      
+      await Bun.write(outFile, compiled);
+      
+    } catch (error) {
+      this.logger.error(`Failed to compile ${srcPath}: ${error.message}`);
+      throw error;
+    }
+  }
+  
+  async processJSFile(srcPath, outPath) {
+    let code = await Bun.file(srcPath).text();
+    
+    // Remove CSS imports
+    code = code.replace(/import\s+['"][^'"]*\.css['"];?\s*/g, '');
+    
+    // Add React import if missing and needed
+    if (!code.includes('import React') && this.usesJSX(code)) {
+      code = `import React from 'react';\n${code}`;
+    }
+    
+    await Bun.write(outPath, code);
+  }
+  
+  usesJSX(code) {
+    return code.includes('React.createElement') || 
+           code.includes('React.Fragment') ||
+           /<[A-Z]/.test(code);
+  }
+  
+  fixRelativeImports(code) {
+    const importRegex = /from\s+['"](\.\.[\/\\]|\.\/)((?:[^'"]+?)(?<!\.js|\.jsx|\.ts|\.tsx|\.json))['"];?/g;
+    
+    code = code.replace(importRegex, (match, prefix, path) => {
+      if (path.endsWith('/') || /\.\w+$/.test(path)) return match;
+      return `from '${prefix}${path}.js';`;
+    });
+    
+    return code;
   }
   
   async discoverRoutes(pagesDir) {
@@ -152,15 +281,6 @@ export class UICompiler {
       const regex = new RegExp(`process\\.env\\.${key}`, 'g');
       code = code.replace(regex, JSON.stringify(value));
     }
-    return code;
-  }
-  
-  fixRelativeImports(code) {
-    const importRegex = /from\s+['"](\.\.[\/\\]|\.\/)((?:[^'"]+?)(?<!\.js|\.jsx|\.ts|\.tsx|\.json))['"];?/g;
-    code = code.replace(importRegex, (match, prefix, path) => {
-      if (path.endsWith('/') || /\.\w+$/.test(path)) return match;
-      return `from '${prefix}${path}.js';`;
-    });
     return code;
   }
 }

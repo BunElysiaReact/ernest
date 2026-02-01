@@ -1,6 +1,6 @@
 {
-  "name": "ernest",
-  "version": "1.0.0",
+  "name": "peaseernest",
+  "version": "0.0.1",
   "description": "Universal bundler for BertUI ecosystem - powers bertui bunny bertuimarked",
   "main": "src/cli.js",
   "type": "module",
@@ -9,8 +9,14 @@
   },
   "files": [
     "src/",
-    "ernest.bundler.js"
+    "ernest.bundler.js",
+    "README.md"
   ],
+  "scripts": {
+    "test": "bun test",
+    "link": "bun link",
+    "unlink": "bun unlink"
+  },
   "dependencies": {
     "ernest-logger": "^2.0.0",
     "lightningcss": "^1.25.0"
@@ -24,12 +30,19 @@
     "bertui",
     "markdown",
     "bun",
-    "ernest"
+    "ernest",
+    "server-islands",
+    "ssg",
+    "static-site-generator"
   ],
   "author": "Ernest Tech House",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ernest-tech-house/ernest"
-  }
+    "url": "https://github.com/BunElysiaReact/ernest.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BunElysiaReact/ernest.git/issues"
+  },
+  "homepage": "https://ernest.ernest-tech.house"
 }
