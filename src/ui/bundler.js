@@ -1,9 +1,9 @@
-// src/ui/bundler.js - COMPLETE VERSION
+// src/ui/bundler.js - COMPLETE VERSION WITH ALL BERTUI FUNCTIONALITY
 import { join } from 'path';
 import { existsSync, mkdirSync, rmSync, readFileSync } from 'fs';
 import { UICompiler } from './compiler.js';
 import { ServerIslandProcessor } from './islands.js';
-import { buildCSS } from '../components/assets.js';
+import { buildCSS, copyStaticAssets } from '../components/assets.js';
 import { generateRouter } from '../components/router.js';
 import { generateHTML } from './html-generator.js';
 
@@ -18,13 +18,14 @@ export async function buildUI(config, logger) {
   // Safety check: ensure logger has banner method
   if (!logger.banner) {
     logger.banner = function() {
-      this.bigLog('⚡ ERNEST by Ernest Tech House(beta)', { color: 'brightCyan' });
+      this.bigLog('⚡ ERNEST by Ernest Tech House', { color: 'brightCyan' });
       this.info('🔧 powers: bertui • bunny • bertuimarked');
     };
   }
   
   logger.banner();
   logger.bigLog('BUILDING WITH SERVER ISLANDS 🏝️', { color: 'green' });
+  logger.info('🔥 OPTIONAL SERVER CONTENT - THE GAME CHANGER');
   
   // Clean directories
   if (existsSync(buildDir)) rmSync(buildDir, { recursive: true });
@@ -49,35 +50,42 @@ export async function buildUI(config, logger) {
       });
     }
     
-    // Step 2: Build CSS
-    logger.info('Step 2: Building CSS...');
+    // Step 2: Build CSS (combining all CSS files)
+    logger.info('Step 2: Combining CSS...');
     await buildCSS(root, outDir, config, logger);
     
-    // Step 3: Generate router
+    // Step 3: Copy static assets (images, public files)
+    logger.info('Step 3: Copying static assets...');
+    await copyStaticAssets(root, outDir, logger);
+    
+    // Step 4: Generate router (if we have routes)
     if (routes.length > 0) {
-      logger.info('Step 3: Generating router...');
+      logger.info('Step 4: Generating router...');
       await generateRouter(routes, buildDir, logger);
     }
     
-    // Step 4: Generate main entry point
-    logger.info('Step 4: Generating main entry point...');
+    // Step 5: Generate main entry point
+    logger.info('Step 5: Generating main entry point...');
     const { generateMainEntry } = await import('../components/entry-generator.js');
     await generateMainEntry(buildDir, routes.length > 0, logger);
     
-    // Step 5: Bundle JavaScript
-    logger.info('Step 5: Bundling JavaScript...');
+    // Step 6: Bundle JavaScript
+    logger.info('Step 6: Bundling JavaScript...');
     const bundleResult = await bundleJavaScript(buildDir, outDir, config, logger);
     
-    // Step 6: Generate HTML
-    logger.info('Step 6: Generating HTML with Server Islands...');
+    // Step 7: Generate HTML with Server Islands
+    logger.info('Step 7: Generating HTML with Server Islands...');
     await generateHTML(routes, serverIslands, bundleResult, outDir, config, logger, islandProcessor);
     
-    // Step 7: Generate sitemap and robots.txt
-    logger.info('Step 7: Generating sitemap and robots.txt...');
+    // Step 8: Generate sitemap.xml
+    logger.info('Step 8: Generating sitemap.xml...');
     await generateSitemap(routes, outDir, config, logger);
+    
+    // Step 9: Generate robots.txt
+    logger.info('Step 9: Generating robots.txt...');
     await generateRobots(outDir, config, logger);
     
-    // Clean up
+    // Clean up build directory
     if (existsSync(buildDir)) rmSync(buildDir, { recursive: true });
     
     // Show summary
@@ -101,7 +109,7 @@ async function bundleJavaScript(buildDir, outDir, config, logger) {
   }
   
   try {
-    // Change working directory to buildDir
+    // Change working directory to buildDir for proper imports
     const originalCwd = process.cwd();
     process.chdir(buildDir);
     
@@ -119,10 +127,10 @@ async function bundleJavaScript(buildDir, outDir, config, logger) {
         chunk: 'chunks/[name]-[hash].js',
         asset: '[name]-[hash].[ext]'
       },
-      external: ['react', 'react-dom', 'react-dom/client', ...config.external],
+      external: ['react', 'react-dom', 'react-dom/client', ...(config.external || [])],
       define: {
         'process.env.NODE_ENV': '"production"',
-        ...config.define
+        ...(config.define || {})
       }
     };
     
@@ -208,13 +216,26 @@ async function generateSitemap(routes, outDir, config, logger) {
   const staticRoutes = routes.filter(r => r.type === 'static');
   const currentDate = new Date().toISOString().split('T')[0];
   
+  const baseUrl = config.baseUrl.replace(/\/$/, ''); // Remove trailing slash
+  
+  function calculatePriority(route) {
+    if (route === '/') return 1.0;
+    if (route.includes(':')) return 0.6;
+    const depth = route.split('/').filter(Boolean).length;
+    if (depth === 1) return 0.8;
+    if (depth === 2) return 0.7;
+    return 0.6;
+  }
+  
   const sitemapUrls = staticRoutes.map(route => {
-    const url = `${config.baseUrl}${route.route}`;
+    const url = `${baseUrl}${route.route}`;
+    const priority = calculatePriority(route.route);
+    
     return `  <url>
     <loc>${url}</loc>
     <lastmod>${currentDate}</lastmod>
     <changefreq>weekly</changefreq>
-    <priority>${route.route === '/' ? '1.0' : '0.8'}</priority>
+    <priority>${priority}</priority>
   </url>`;
   }).join('\n');
   
@@ -225,6 +246,7 @@ ${sitemapUrls}
   
   await Bun.write(join(outDir, 'sitemap.xml'), sitemap);
   logger.success(`✅ Sitemap generated: ${staticRoutes.length} URLs`);
+  logger.info(`   Location: ${join(outDir, 'sitemap.xml')}`);
 }
 
 async function generateRobots(outDir, config, logger) {
@@ -233,14 +255,35 @@ async function generateRobots(outDir, config, logger) {
     return;
   }
   
-  const robotsTxt = `# Generated by Ernest
+  const baseUrl = config.baseUrl.replace(/\/$/, ''); // Remove trailing slash
+  const sitemapUrl = `${baseUrl}/sitemap.xml`;
+  
+  let robotsTxt = `# Ernest Generated robots.txt
 User-agent: *
 Allow: /
 
-Sitemap: ${config.baseUrl}/sitemap.xml`;
+# Sitemap
+Sitemap: ${sitemapUrl}
+`;
+  
+  // Add custom disallow rules if specified in config
+  if (config?.robots?.disallow && Array.isArray(config.robots.disallow) && config.robots.disallow.length > 0) {
+    robotsTxt += '\n# Custom Disallow Rules\n';
+    config.robots.disallow.forEach(path => {
+      robotsTxt += `Disallow: ${path}\n`;
+    });
+    logger.info(`   Blocked ${config.robots.disallow.length} path(s)`);
+  }
+  
+  // Add crawl delay if specified
+  if (config?.robots?.crawlDelay && typeof config.robots.crawlDelay === 'number') {
+    robotsTxt += `\nCrawl-delay: ${config.robots.crawlDelay}\n`;
+    logger.info(`   Crawl delay: ${config.robots.crawlDelay}s`);
+  }
   
   await Bun.write(join(outDir, 'robots.txt'), robotsTxt);
   logger.success('✅ robots.txt generated');
+  logger.info(`   Location: ${join(outDir, 'robots.txt')}`);
 }
 
 function showBuildSummary(routes, serverIslands, clientRoutes, duration, logger) {

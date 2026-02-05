@@ -1,3 +1,4 @@
+// src/ui/compiler-dev.js - COMPLETE FIXED VERSION
 import { join, dirname, relative, extname } from 'path';
 import { existsSync, mkdirSync, readdirSync, statSync } from 'fs';
 import { generateRouter } from '../components/router.js';
@@ -117,6 +118,16 @@ async function compileDirectory(srcDir, outDir, root, logger) {
         
         code = code.replace(/import\s+['"][^'"]*\.css['"];?\s*/g, '');
         
+        // ✅ FIX: Transform bertui/router imports for dev
+        const buildDir = join(root, '.ernest', 'compiled');
+        const routerPath = join(buildDir, 'router.js');
+        
+        if (existsSync(routerPath)) {
+          const relativeToRouter = relative(dirname(outPath), routerPath).replace(/\\/g, '/');
+          const routerImport = relativeToRouter.startsWith('.') ? relativeToRouter : './' + relativeToRouter;
+          code = code.replace(/from\s+['"]bertui\/router['"]/g, `from '${routerImport}'`);
+        }
+        
         if (usesJSX(code) && !code.includes('import React')) {
           code = `import React from 'react';\n${code}`;
         }
@@ -141,7 +152,16 @@ async function compileFile(srcPath, outDir, filename, relativePath, root, logger
     
     code = code.replace(/import\s+['"][^'"]*\.css['"];?\s*/g, '');
     
+    // ✅ FIX: Transform bertui/router imports for dev
     const outPath = join(outDir, filename.replace(/\.(jsx|tsx|ts)$/, '.js'));
+    const buildDir = join(root, '.ernest', 'compiled');
+    const routerPath = join(buildDir, 'router.js');
+    
+    if (existsSync(routerPath)) {
+      const relativeToRouter = relative(dirname(outPath), routerPath).replace(/\\/g, '/');
+      const routerImport = relativeToRouter.startsWith('.') ? relativeToRouter : './' + relativeToRouter;
+      code = code.replace(/from\s+['"]bertui\/router['"]/g, `from '${routerImport}'`);
+    }
     
     const transpiler = new Bun.Transpiler({ 
       loader,

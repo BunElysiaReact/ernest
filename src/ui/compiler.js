@@ -1,4 +1,4 @@
-// src/ui/compiler.js - COMPLETE VERSION
+// src/ui/compiler.js - COMPLETE FIXED VERSION
 import { join, dirname, relative, extname } from 'path';
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'fs';
 
@@ -101,6 +101,9 @@ jsxFragment = "React.Fragment"
     try {
       let code = await Bun.file(srcPath).text();
       
+      // ✅ FIX: Transform bertui/router imports BEFORE compilation
+      code = this.fixBertuiImports(code, srcPath, outFile);
+      
       // Remove CSS imports
       code = code.replace(/import\s+['"][^'"]*\.css['"];?\s*/g, '');
       code = code.replace(/import\s+['"]bertui\/styles['"]\s*;?\s*/g, '');
@@ -143,6 +146,9 @@ jsxFragment = "React.Fragment"
   async processJSFile(srcPath, outPath) {
     let code = await Bun.file(srcPath).text();
     
+    // ✅ FIX: Transform bertui/router imports
+    code = this.fixBertuiImports(code, srcPath, outPath);
+    
     // Remove CSS imports
     code = code.replace(/import\s+['"][^'"]*\.css['"];?\s*/g, '');
     
@@ -152,6 +158,31 @@ jsxFragment = "React.Fragment"
     }
     
     await Bun.write(outPath, code);
+  }
+  
+  // ✅ NEW METHOD: Fix bertui/router imports (like bertui does)
+  fixBertuiImports(code, srcPath, outPath) {
+    const root = this.root;
+    const buildDir = join(root, '.ernestbuild');
+    
+    // Transform bertui/router to point to local router.js
+    const routerPath = join(buildDir, 'router.js');
+    
+    if (existsSync(routerPath)) {
+      // Calculate relative path from compiled file to router.js
+      const relativeToRouter = relative(dirname(outPath), routerPath).replace(/\\/g, '/');
+      const routerImport = relativeToRouter.startsWith('.') ? relativeToRouter : './' + relativeToRouter;
+      
+      // Replace all bertui/router imports
+      code = code.replace(/from\s+['"]bertui\/router['"]/g, `from '${routerImport}'`);
+      
+      // Also handle import { Link } from 'bertui/router' patterns
+      code = code.replace(/import\s+\{([^}]+)\}\s+from\s+['"]bertui\/router['"]/g, `import {$1} from '${routerImport}'`);
+    } else {
+      this.logger.warn(`⚠️  router.js not found in build directory, bertui/router imports may fail`);
+    }
+    
+    return code;
   }
   
   usesJSX(code) {
@@ -222,6 +253,9 @@ jsxFragment = "React.Fragment"
     
     try {
       let code = await Bun.file(srcPath).text();
+      
+      // ✅ FIX: Transform bertui/router imports
+      code = this.fixBertuiImports(code, srcPath, outPath);
       
       // Remove CSS imports
       code = this.removeCSSImports(code);
