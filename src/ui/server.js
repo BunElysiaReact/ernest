@@ -1,4 +1,3 @@
-// src/ui/server.js - COMPLETE FIXED VERSION
 import { join, extname } from 'path';
 import { existsSync, readdirSync } from 'fs';
 import { compileProject } from './compiler-dev.js';
@@ -108,9 +107,9 @@ export async function startDevServerUI(config, logger) {
         }
       }
       
-      // Serve node_modules
+      // Serve node_modules (CRITICAL FIX)
       if (url.pathname.startsWith('/node_modules/')) {
-        const filepath = join(root, 'node_modules', url.pathname.replace('/node_modules/', ''));
+        const filepath = join(root, url.pathname);
         const file = Bun.file(filepath);
         
         if (await file.exists()) {
@@ -171,17 +170,18 @@ async function serveHTML(root, config, port, logger) {
   let bertuiAnimateStylesheet = '';
   const bertuiAnimatePath = join(root, 'node_modules/bertui-animate/dist/bertui-animate.min.css');
   if (existsSync(bertuiAnimatePath)) {
-    bertuiAnimateStylesheet = '  <link rel="stylesheet" href="/bertui-animate.css">';
+    bertuiAnimateStylesheet = '  <link rel="stylesheet" href="/node_modules/bertui-animate/dist/bertui-animate.min.css">';
   }
   
   // Build import map
   const importMap = {
     "react": "https://esm.sh/react@18.2.0",
     "react-dom": "https://esm.sh/react-dom@18.2.0",
-    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client"
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime"
   };
   
-  // Auto-detect bertui packages
+  // Auto-detect bertui packages in node_modules
   const nodeModulesDir = join(root, 'node_modules');
   if (existsSync(nodeModulesDir)) {
     try {
@@ -189,6 +189,7 @@ async function serveHTML(root, config, port, logger) {
       
       for (const pkg of packages) {
         if (!pkg.startsWith('bertui-')) continue;
+        if (pkg.startsWith('.')) continue;
         
         const pkgDir = join(nodeModulesDir, pkg);
         const pkgJsonPath = join(pkgDir, 'package.json');
@@ -200,6 +201,13 @@ async function serveHTML(root, config, port, logger) {
           const pkgJson = JSON.parse(pkgJsonContent);
           
           let mainFile = pkgJson.main || 'index.js';
+          // Handle exports field
+          if (pkgJson.exports && pkgJson.exports['.']) {
+            const exportValue = pkgJson.exports['.'];
+            mainFile = exportValue.default || exportValue.import || exportValue.require || mainFile;
+          }
+          
+          mainFile = mainFile.replace(/^\.\//, '');
           const fullPath = join(pkgDir, mainFile);
           
           if (existsSync(fullPath)) {
@@ -211,6 +219,30 @@ async function serveHTML(root, config, port, logger) {
       }
     } catch (error) {
       // Ignore scan errors
+    }
+  }
+  
+  // Manual bertui/router mapping
+  const bertuiRouterJS = join(nodeModulesDir, 'bertui', 'src', 'router', 'Router.js');
+  const bertuiRouterJSX = join(nodeModulesDir, 'bertui', 'src', 'router', 'Router.jsx');
+  
+  if (existsSync(bertuiRouterJS)) {
+    importMap['bertui/router'] = '/node_modules/bertui/src/router/Router.js';
+  } else if (existsSync(bertuiRouterJSX)) {
+    importMap['bertui/router'] = '/node_modules/bertui/src/router/Router.jsx';
+  } else {
+    // Fallback: try to find any Router file
+    const bertuiDir = join(nodeModulesDir, 'bertui');
+    if (existsSync(bertuiDir)) {
+      try {
+        const files = readdirSync(bertuiDir, { recursive: true });
+        const routerFile = files.find(f => f.includes('Router.'));
+        if (routerFile) {
+          importMap['bertui/router'] = `/node_modules/bertui/${routerFile}`;
+        }
+      } catch (error) {
+        // Ignore
+      }
     }
   }
   
@@ -232,7 +264,7 @@ ${userStylesheets}
 ${bertuiAnimateStylesheet}
   
   <script type="importmap">
-  ${JSON.stringify({ imports: importMap }, null, 2)}
+${JSON.stringify({ imports: importMap }, null, 2)}
   </script>
   
   <style>
@@ -298,6 +330,10 @@ function getImageContentType(ext) {
 function getContentType(ext) {
   const types = {
     '.js': 'application/javascript',
+    '.mjs': 'application/javascript',
+    '.jsx': 'application/javascript',
+    '.ts': 'application/typescript',
+    '.tsx': 'application/typescript',
     '.css': 'text/css',
     '.html': 'text/html',
     '.json': 'application/json',
@@ -307,9 +343,11 @@ function getContentType(ext) {
     '.gif': 'image/gif',
     '.svg': 'image/svg+xml',
     '.woff': 'font/woff',
-    '.woff2': 'font/woff2'
+    '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf',
+    '.otf': 'font/otf'
   };
-  return types[ext.toLowerCase()] || 'text/plain';
+  return types[ext.toLowerCase()] || 'application/octet-stream';
 }
 
 function setupFileWatcher(root, compiledDir, clients, logger) {
@@ -324,8 +362,7 @@ function setupFileWatcher(root, compiledDir, clients, logger) {
   logger.info(`👀 Watching for changes: ${srcDir}`);
   
   let isRecompiling = false;
-  let recompileTimeout = null;
-  const watchedExtensions = ['.js', '.jsx', '.ts', '.tsx', '.css'];
+  let pendingChanges = new Set();
   
   function notifyClients(message) {
     for (const client of clients) {
@@ -343,37 +380,42 @@ function setupFileWatcher(root, compiledDir, clients, logger) {
     if (!filename) return;
     
     const ext = extname(filename);
-    if (!watchedExtensions.includes(ext)) return;
+    if (!['.js', '.jsx', '.ts', '.tsx', '.css'].includes(ext)) return;
     
     logger.info(`📝 File changed: ${filename}`);
     
-    clearTimeout(recompileTimeout);
+    pendingChanges.add(filename);
     
-    recompileTimeout = setTimeout(async () => {
-      if (isRecompiling) return;
+    if (isRecompiling) return;
+    
+    isRecompiling = true;
+    
+    // Wait a bit to collect multiple changes
+    await Bun.sleep(50);
+    
+    const changes = Array.from(pendingChanges);
+    pendingChanges.clear();
+    
+    notifyClients({ type: 'recompiling' });
+    logger.info(`Recompiling ${changes.length} file(s)...`);
+    
+    try {
+      // Recompile project (will use caching)
+      await compileProject(root, {}, logger);
       
-      isRecompiling = true;
-      notifyClients({ type: 'recompiling' });
-      logger.info('Recompiling...');
+      logger.success('✅ Recompiled successfully');
+      notifyClients({ type: 'compiled' });
       
-      try {
-        // Recompile project
-        await compileProject(root, {}, logger);
-        
-        logger.success('✅ Recompiled successfully');
-        notifyClients({ type: 'compiled' });
-        
-        // Trigger reload after a short delay
-        setTimeout(() => {
-          notifyClients({ type: 'reload' });
-        }, 100);
-        
-      } catch (error) {
-        logger.error(`Recompilation failed: ${error.message}`);
-      } finally {
-        isRecompiling = false;
-      }
-    }, 150);
+      // Trigger reload after a short delay
+      setTimeout(() => {
+        notifyClients({ type: 'reload' });
+      }, 100);
+      
+    } catch (error) {
+      logger.error(`Recompilation failed: ${error.message}`);
+    } finally {
+      isRecompiling = false;
+    }
   });
   
   if (existsSync(configPath)) {

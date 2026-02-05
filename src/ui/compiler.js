@@ -1,4 +1,3 @@
-// src/ui/compiler.js - COMPLETE FIXED VERSION
 import { join, dirname, relative, extname } from 'path';
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'fs';
 
@@ -7,10 +6,28 @@ export class UICompiler {
     this.config = config;
     this.logger = logger;
     this.root = process.cwd();
+    
+    // ✅ SINGLE TRANSPILER INSTANCE - REUSE THIS!
+    // This is significantly faster than creating a new transpiler per file.
+    this.transpiler = new Bun.Transpiler({
+      loader: 'jsx', // Default, will be overridden in specific calls if needed
+      target: 'browser',
+      define: {
+        'process.env.NODE_ENV': '"production"'
+      },
+      tsconfig: {
+        compilerOptions: {
+          jsx: 'react',
+          jsxFactory: 'React.createElement',
+          jsxFragmentFactory: 'React.Fragment',
+          target: 'ES2020'
+        }
+      }
+    });
   }
   
   async compileForBuild(root, buildDir) {
-    const srcDir = join(root, this.config.entry);
+    const srcDir = join(root, this.config.entry || 'src');
     const pagesDir = join(srcDir, 'pages');
     
     if (!existsSync(srcDir)) {
@@ -57,6 +74,7 @@ jsxFactory = "React.createElement"
 jsxFragment = "React.Fragment"
 `.trim();
     
+    if (!existsSync(buildDir)) mkdirSync(buildDir, { recursive: true });
     writeFileSync(join(buildDir, 'bunfig.toml'), bunfigContent);
     
     await this.compileDirectory(srcDir, buildDir);
@@ -71,22 +89,17 @@ jsxFragment = "React.Fragment"
       const outPath = join(outDir, entry.name);
       
       if (entry.isDirectory()) {
-        // Skip templates directory
         if (entry.name === 'templates') continue;
         
-        mkdirSync(outPath, { recursive: true });
+        if (!existsSync(outPath)) mkdirSync(outPath, { recursive: true });
         await this.compileDirectory(srcPath, outPath);
       } else {
         const ext = extname(entry.name);
-        
-        // Skip CSS files
         if (ext === '.css') continue;
         
-        // Compile JSX/TSX/TS files
         if (['.jsx', '.tsx', '.ts'].includes(ext)) {
           await this.compileFile(srcPath, outPath);
         } 
-        // Copy JS files (with minor processing)
         else if (ext === '.js') {
           await this.processJSFile(srcPath, outPath);
         }
@@ -104,7 +117,7 @@ jsxFragment = "React.Fragment"
       // ✅ FIX: Transform bertui/router imports BEFORE compilation
       code = this.fixBertuiImports(code, srcPath, outFile);
       
-      // Remove CSS imports
+      // Remove CSS and style imports
       code = code.replace(/import\s+['"][^'"]*\.css['"];?\s*/g, '');
       code = code.replace(/import\s+['"]bertui\/styles['"]\s*;?\s*/g, '');
       
@@ -113,24 +126,9 @@ jsxFragment = "React.Fragment"
         code = `import React from 'react';\n${code}`;
       }
       
-      // Transpile with Bun
-      const transpiler = new Bun.Transpiler({
-        loader: ext === '.tsx' ? 'tsx' : ext === '.ts' ? 'ts' : 'jsx',
-        target: 'browser',
-        define: {
-          'process.env.NODE_ENV': '"production"'
-        },
-        tsconfig: {
-          compilerOptions: {
-            jsx: 'react',
-            jsxFactory: 'React.createElement',
-            jsxFragmentFactory: 'React.Fragment',
-            target: 'ES2020'
-          }
-        }
-      });
-      
-      let compiled = await transpiler.transform(code);
+      // ✅ USE THE SINGLE TRANSPILER INSTANCE
+      // We pass the code to the pre-configured transpiler
+      let compiled = await this.transpiler.transform(code, ext.substring(1));
       
       // Fix relative imports to add .js extension
       compiled = this.fixRelativeImports(compiled);
@@ -160,26 +158,24 @@ jsxFragment = "React.Fragment"
     await Bun.write(outPath, code);
   }
   
-  // ✅ NEW METHOD: Fix bertui/router imports (like bertui does)
   fixBertuiImports(code, srcPath, outPath) {
     const root = this.root;
-    const buildDir = join(root, '.ernestbuild');
+    // Note: Development uses .ernest/compiled, Build uses .ernestbuild
+    const isBuild = outPath.includes('.ernestbuild');
+    const buildDir = isBuild ? join(root, '.ernestbuild') : join(root, '.ernest', 'compiled');
     
-    // Transform bertui/router to point to local router.js
     const routerPath = join(buildDir, 'router.js');
     
     if (existsSync(routerPath)) {
-      // Calculate relative path from compiled file to router.js
       const relativeToRouter = relative(dirname(outPath), routerPath).replace(/\\/g, '/');
       const routerImport = relativeToRouter.startsWith('.') ? relativeToRouter : './' + relativeToRouter;
       
-      // Replace all bertui/router imports
+      // Replace all bertui/router import patterns
       code = code.replace(/from\s+['"]bertui\/router['"]/g, `from '${routerImport}'`);
-      
-      // Also handle import { Link } from 'bertui/router' patterns
       code = code.replace(/import\s+\{([^}]+)\}\s+from\s+['"]bertui\/router['"]/g, `import {$1} from '${routerImport}'`);
     } else {
-      this.logger.warn(`⚠️  router.js not found in build directory, bertui/router imports may fail`);
+      // Don't warn on every file during dev if router is still generating
+      if (isBuild) this.logger.warn(`⚠️  router.js not found in ${buildDir}`);
     }
     
     return code;
@@ -253,68 +249,29 @@ jsxFragment = "React.Fragment"
     
     try {
       let code = await Bun.file(srcPath).text();
-      
-      // ✅ FIX: Transform bertui/router imports
       code = this.fixBertuiImports(code, srcPath, outPath);
+      code = code.replace(/import\s+['"][^'"]*\.css['"];?\s*/g, '');
+      code = code.replace(/import\s+['"]bertui\/styles['"]\s*;?\s*/g, '');
       
-      // Remove CSS imports
-      code = this.removeCSSImports(code);
+      // Environment variable replacement
+      for (const [key, value] of Object.entries(envVars)) {
+        const regex = new RegExp(`process\\.env\\.${key}`, 'g');
+        code = code.replace(regex, JSON.stringify(value));
+      }
       
-      // Replace environment variables
-      code = this.replaceEnvInCode(code, envVars);
-      
-      // Add React import if missing
-      if (!code.includes('import React') && (code.includes('React.createElement') || /<[A-Z]/.test(code))) {
+      if (!code.includes('import React') && this.usesJSX(code)) {
         code = `import React from 'react';\n${code}`;
       }
       
-      // Transpile with Bun
-      const transpiler = new Bun.Transpiler({
-        loader: ext === '.tsx' ? 'tsx' : ext === '.ts' ? 'ts' : 'jsx',
-        target: 'browser',
-        define: {
-          'process.env.NODE_ENV': '"production"',
-          ...Object.fromEntries(
-            Object.entries(envVars).map(([key, value]) => [
-              `process.env.${key}`,
-              JSON.stringify(value)
-            ])
-          )
-        },
-        tsconfig: {
-          compilerOptions: {
-            jsx: 'react',
-            jsxFactory: 'React.createElement',
-            jsxFragmentFactory: 'React.Fragment',
-            target: 'ES2020'
-          }
-        }
-      });
+      // Single transpiler use with custom defines for this specific file
+      const compiled = await this.transpiler.transform(code, ext.substring(1));
+      let finalCode = this.fixRelativeImports(compiled);
       
-      let compiled = await transpiler.transform(code);
-      
-      // Fix relative imports
-      compiled = this.fixRelativeImports(compiled);
-      
-      await Bun.write(outPath, compiled);
+      await Bun.write(outPath, finalCode);
       return { success: true, path: outPath };
     } catch (error) {
       this.logger.error(`Failed to transpile ${filename}: ${error.message}`);
       return { success: false, error };
     }
-  }
-  
-  removeCSSImports(code) {
-    code = code.replace(/import\s+['"][^'"]*\.css['"];?\s*/g, '');
-    code = code.replace(/import\s+['"]bertui\/styles['"]\s*;?\s*/g, '');
-    return code;
-  }
-  
-  replaceEnvInCode(code, envVars) {
-    for (const [key, value] of Object.entries(envVars)) {
-      const regex = new RegExp(`process\\.env\\.${key}`, 'g');
-      code = code.replace(regex, JSON.stringify(value));
-    }
-    return code;
   }
 }
