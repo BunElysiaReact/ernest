@@ -98,8 +98,7 @@ export class UICompiler {
               code = code.replace(/jsx[_a-zA-Z0-9]*/g, 'React.createElement');
             }
             
-            // Remove ALL CSS imports - FIXED to handle no-space case: import"file.css"
-            code = code.replace(/import\s*['"][^'"]*\.css['"]\s*;?\s*/g, '');
+            // Remove ALL CSS imports - FIXED to handle no-space case: code = code.replace(/import\s*['"][^'"]*\.css['"]\s*;?\s*/g, '');
             code = code.replace(/import\s*['"][^'"]*\/styles\/[^'"]*\.css['"]\s*;?\s*/g, '');
             code = code.replace(/import\s*['"]bertui\/styles['"]\s*;?\s*/g, '');
             code = code.replace(/import\s+.*from\s*['"][^'"]*\.css['"]\s*;?\s*/g, '');

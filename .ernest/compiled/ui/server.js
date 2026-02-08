@@ -1,7 +1,6 @@
-// src/ui/server.js - FIXED VERSION with emoji removal
+// src/ui/server.js - COMPLETE FIXED VERSION
 import { join, extname } from 'path';
 import { existsSync, readdirSync } from 'fs';
-import { BertuiDeps } from '../utils/bertui-deps.js';
 
 export async function startDevServerUI(config, logger) {
   const port = config.port || 3000;
@@ -11,7 +10,7 @@ export async function startDevServerUI(config, logger) {
   const srcDir = join(root, config.entry || 'src');
   const publicDir = join(root, 'public');
   
-  logger.info(`🚀 Starting BertUI development server on port ${port}...`);
+  logger.info(`🚀 Starting UI development server on port ${port}...`);
   
   // Initial compilation
   try {
@@ -42,7 +41,7 @@ export async function startDevServerUI(config, logger) {
       // Serve HTML
       if (url.pathname === '/' || (!url.pathname.includes('.') && !url.pathname.startsWith('/compiled'))) {
         return new Response(await serveHTML(root, config, port, logger), {
-          headers: { 'Content-Type': 'text/html; charset=utf-8' }
+          headers: { 'Content-Type': 'text/html' }
         });
       }
       
@@ -61,7 +60,7 @@ export async function startDevServerUI(config, logger) {
         }
       }
       
-      // Serve CSS from .ernest/styles/
+      // Serve CSS - FIXED
       if (url.pathname === '/styles/bertui.min.css' || url.pathname.startsWith('/styles/')) {
         const filename = url.pathname === '/styles/bertui.min.css' ? 'bertui.min.css' : url.pathname.replace('/styles/', '');
         const filepath = join(stylesDir, filename);
@@ -70,76 +69,20 @@ export async function startDevServerUI(config, logger) {
         if (await file.exists()) {
           return new Response(file, {
             headers: { 
-              'Content-Type': 'text/css; charset=utf-8',
+              'Content-Type': 'text/css',
               'Cache-Control': 'no-store'
             }
           });
         }
       }
       
-      // Serve node_modules files (for BertUI packages) - WITH EMOJI REMOVAL
+      // Serve node_modules files
       if (url.pathname.startsWith('/node_modules/')) {
         const filepath = join(root, url.pathname);
         const file = Bun.file(filepath);
         
         if (await file.exists()) {
-          const ext = extname(filepath);
-          const contentType = getContentType(ext);
-          
-          // For JavaScript files, remove emojis
-          if (ext === '.js' || ext === '.jsx' || ext === '.mjs' || ext === '.ts' || ext === '.tsx') {
-            let content = await file.text();
-            
-            // Remove emojis and problematic Unicode characters
-            content = content
-              // Remove common emojis and symbols
-              .replace(/[\u{1F300}-\u{1F9FF}]/gu, '') // Emojis
-              .replace(/[\u{2700}-\u{27BF}]/gu, '')   // Dingbats
-              .replace(/[\u{2600}-\u{26FF}]/gu, '')   // Misc symbols
-              .replace(/[\u{1F600}-\u{1F64F}]/gu, '') // Emoticons
-              .replace(/✅/gu, '✓ ')                   // Checkmark
-              .replace(/❌/gu, '✗ ')                   // Cross
-              .replace(/⚠️/gu, '! ')                   // Warning
-              .replace(/🚀/gu, '')                     // Rocket
-              .replace(/🎉/gu, '')                     // Party
-              .replace(/📦/gu, '')                     // Package
-              .replace(/⚡/gu, '')                     // Zap
-              .replace(/🔧/gu, '')                     // Wrench
-              .replace(/🎯/gu, '')                     // Target
-              .replace(/📄/gu, '')                     // Page
-              .replace(/🏝️/gu, '')                     // Island
-              .replace(/✨/gu, '')                     // Sparkles
-              .replace(/📋/gu, '')                     // Clipboard
-              .replace(/💡/gu, '')                     // Bulb
-              .replace(/🔍/gu, '')                     // Magnifier
-              .replace(/🚧/gu, '')                     // Construction
-              .replace(/📝/gu, '')                     // Memo
-              .replace(/👀/gu, '')                     // Eyes
-              .replace(/🛠️/gu, '')                     // Tools
-              .replace(/🌐/gu, '');                    // Globe
-            
-            // Also remove the corrupted versions (like âœ…)
-            content = content
-              .replace(/âœ…/g, '✓ ')
-              .replace(/â\x9F\x98\x8E/g, '')
-              .replace(/â\x9F\x92\xA1/g, '')
-              .replace(/â\x9F\x93\x84/g, '')
-              .replace(/â\x9F\x8E\x89/g, '')
-              .replace(/â\x9F\x94\xA5/g, '')
-              .replace(/â\x9F\x8F\x9D/g, '');
-            
-            // Clean up any double spaces
-            content = content.replace(/\s+/g, ' ').trim();
-            
-            return new Response(content, {
-              headers: { 
-                'Content-Type': contentType,
-                'Cache-Control': 'no-cache'
-              }
-            });
-          }
-          
-          // For other files, serve normally
+          const contentType = getContentType(extname(filepath));
           return new Response(file, {
             headers: { 
               'Content-Type': contentType,
@@ -209,24 +152,58 @@ export async function startDevServerUI(config, logger) {
 async function serveHTML(root, config, port, logger) {
   const meta = config.meta || {};
   
-  // Get BertUI dependencies
-  const deps = new BertuiDeps(root, logger);
-  const { importMap, stylesheets } = deps.scan();
+  // Build import map
+  const importMap = {
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom": "https://esm.sh/react-dom@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime"
+  };
   
-  // Build CSS links
-  const cssLinks = [
-    '<link rel="stylesheet" href="/styles/bertui.min.css">',
-    ...stylesheets.map(href => `<link rel="stylesheet" href="${href}">`)
-  ].join('\n  ');
+  // Scan node_modules for packages
+  const nodeModulesDir = join(root, 'node_modules');
+  if (existsSync(nodeModulesDir)) {
+    try {
+      const packages = readdirSync(nodeModulesDir);
+      
+      for (const pkg of packages) {
+        if (pkg.startsWith('bertui-') || pkg === 'bertui') {
+          const pkgDir = join(nodeModulesDir, pkg);
+          const pkgJsonPath = join(pkgDir, 'package.json');
+          
+          if (!existsSync(pkgJsonPath)) continue;
+          
+          try {
+            const pkgJsonContent = await Bun.file(pkgJsonPath).text();
+            const pkgJson = JSON.parse(pkgJsonContent);
+            
+            // Find the main entry point
+            let mainFile = pkgJson.module || pkgJson.main || 'index.js';
+            mainFile = mainFile.replace(/^\.\//, '');
+            const fullPath = join(pkgDir, mainFile);
+            
+            if (existsSync(fullPath)) {
+              importMap[pkg] = `/node_modules/${pkg}/${mainFile}`;
+            }
+          } catch (error) {
+            // Skip packages with invalid package.json
+            continue;
+          }
+        }
+      }
+    } catch (error) {
+      logger.warn(`Could not scan node_modules: ${error.message}`);
+    }
+  }
   
   return `<!DOCTYPE html>
 <html lang="${meta.lang || 'en'}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${meta.title || 'BertUI App'}</title>
+  <title>${meta.title || 'Ernest App'}</title>
   
-  ${cssLinks}
+  <link rel="stylesheet" href="/styles/bertui.min.css">
   
   <script type="importmap">
 ${JSON.stringify({ imports: importMap }, null, 2)}
@@ -271,14 +248,14 @@ function getImageContentType(ext) {
 
 function getContentType(ext) {
   const types = {
-    '.js': 'application/javascript; charset=utf-8',
-    '.mjs': 'application/javascript; charset=utf-8',
-    '.jsx': 'application/javascript; charset=utf-8',
-    '.ts': 'application/typescript; charset=utf-8',
-    '.tsx': 'application/typescript; charset=utf-8',
-    '.css': 'text/css; charset=utf-8',
-    '.html': 'text/html; charset=utf-8',
-    '.json': 'application/json; charset=utf-8',
+    '.js': 'application/javascript',
+    '.mjs': 'application/javascript',
+    '.jsx': 'application/javascript',
+    '.ts': 'application/typescript',
+    '.tsx': 'application/typescript',
+    '.css': 'text/css',
+    '.html': 'text/html',
+    '.json': 'application/json',
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
     '.jpeg': 'image/jpeg',
